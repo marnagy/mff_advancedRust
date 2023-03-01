@@ -38,7 +38,7 @@ impl Server {
         let server_clone = server.clone();
 
         let handle = tokio::spawn(async move {
-            server_clone.process_connection().await;
+            server_clone.start_live_loop().await;
         });
         //let fut = server_clone.run();
         server.live_loop = Arc::new(Some(Box::new(handle)));
@@ -46,19 +46,26 @@ impl Server {
         server
 
     }
-    async fn process_connection(&self) {
+    async fn start_live_loop(&self) {
         println!("Server is waiting for connection...");
 
+        
         loop {
+            let server_clone = self.clone();
             match self.listener.accept().await {
                 Ok((socket, addr)) => {
                     println!("new client: {:?}", addr);
                     // TODO: process new connection
-                    //tokio::spawn();
+                    tokio::spawn(async move {
+                        server_clone.process_connection(socket, addr).await;
+                    });
                 },
                 Err(e) => println!("couldn't get client: {:?}", e),
             }
         }
+    }
+    async fn process_connection(&self, socket: TcpStream, addr: SocketAddr){
+
     }
     pub async fn quit(self) {
         let mut streams = self.streams.lock().await;
