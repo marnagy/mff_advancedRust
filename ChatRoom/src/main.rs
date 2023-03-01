@@ -13,15 +13,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let listener = TcpListener::bind(("127.0.0.1", 8000)).await?;
     let server = Server::new(listener);
 
-    let client1 = Client::new( Arc::new(Mutex::new(TcpStream::connect("localhost:8000").await?)) );
+    sleep(Duration::from_secs(1) ).await;
+
+    let mut client1 = Client::new( TcpStream::connect("localhost:8000").await? );
     let channel1 = client1.channel("Marek").await.unwrap();
 
-    let client2 = Client::new( Arc::new(Mutex::new(TcpStream::connect("localhost:8000").await?)) );
-    let channel2 = client2.channel("Samo").await.unwrap();
+    // let client2 = Client::new( Arc::new(Mutex::new(TcpStream::connect("localhost:8000").await?)) );
+    // let channel2 = client2.channel("Samo").await.unwrap();
 
-    println!("Starting sleep from main thread");
-    sleep(Duration::from_secs(5) ).await;
-    println!("Sleep passed");
+    println!(">>> Starting sleep from main thread");
+    sleep(Duration::from_secs(2) ).await;
+    println!(">>> Sleep passed");
 
     server.quit().await;
 

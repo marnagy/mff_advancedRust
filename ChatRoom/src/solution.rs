@@ -3,13 +3,15 @@ extern crate tokio;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tokio::io::{AsyncBufRead, AsyncWrite, BufReader, BufWriter, ReadHalf, WriteHalf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::runtime::Runtime;
 use std::borrow::BorrowMut;
 use std::fmt::Display;
+//use std::io::{BufWriter, BufReader};
 use std::net::SocketAddr;
-use std::ops::Deref;
-//use std::error::Error;
 use std::sync::Arc;
+//use std::futures::executor;
 
 #[derive(Debug, PartialEq)]
 pub struct Error {
@@ -30,7 +32,7 @@ impl std::error::Error for Error {
 // #[derive(Debug)]
 pub struct Server {
     listener: Arc<TcpListener>,
-    streams: Arc<Mutex<Vec<(Box<Channel>, SocketAddr)>>>,
+    streams: Arc<Mutex<Vec<(String, Arc<Mutex<Channel>>, SocketAddr)>>>,
     live_loop: Arc<Option<Box<JoinHandle<()>>>>
 }
 
@@ -84,17 +86,32 @@ impl Server {
         }
     }
     async fn process_connection(&self, socket: TcpStream, addr: SocketAddr){
-        let channel = Channel::new(Arc::new(Mutex::new(socket)));
-        let mut boxed_channel = Box::new(channel);
+        //let (mut read, mut write) = tokio::io::split(socket);
+        let mut channel = Arc::new(
+            Mutex::new(
+                Channel::new(
+                    socket
+                )
+            )
+        );
+        // read name from channel
+        let name = {
+            channel.lock().await.receive().await.unwrap()
+        };
+
+        println!("Received name: {}", name);
+
         //let channel_cloned = channel.copy();
+        let connection_index;
         {
             let mut streams = self.streams.lock().await;
-            streams.push( (boxed_channel.clone(), addr.clone()) );
+            connection_index = streams.len();
+            streams.push( (name, channel.clone(), addr.clone()) );
         }
 
         // TODO: 
         loop {
-            let received_msg_from_client = boxed_channel.as_mut().receive().await.unwrap();
+            let received_msg_from_client =  channel.lock().await.receive().await.unwrap();
             println!("Received msg: \"{}\" from {}", received_msg_from_client, addr);
         }
     }
@@ -106,23 +123,34 @@ impl Server {
 
 #[derive(Debug)]
 pub struct Channel {
-    stream: Arc<Mutex<TcpStream>>,
+    //stream: Arc<Mutex<TcpStream>>,
+    writer: WriteHalf<TcpStream>,
+    reader: ReadHalf<TcpStream>,
     buffer: [u8; 1024]
 }
 
-impl Clone for Channel {
-    fn clone(&self) -> Self {
-        Channel {
-            stream: self.stream.clone(),
-            buffer: self.buffer.clone()
-        }
-    }
-}
+// impl Clone for Channel {
+//     fn clone(&self) -> Self {
+//         let stream_mutex_guard = Runtime::new().unwrap().block_on(async {
+//             self.stream.lock().await
+//         });
+//         let (mut reader, mut writer) = tokio::io::split(stream_mutex_guard);
+//         Channel {
+//             stream: self.stream.clone(),
+//             writer: writer,
+//             reader: reader,
+//             buffer: self.buffer.clone()
+//         }
+//     }
+// }
 
 impl Channel {
-    fn new(stream: Arc<Mutex<TcpStream>>) -> Self {
+    fn new(stream: TcpStream) -> Self {
+        let (mut reader, mut writer) = tokio::io::split(stream);
         Channel {
-            stream: stream.clone(),
+            //stream: Arc::new(Mutex::new(stream)),
+            writer: writer,
+            reader: reader,
             buffer: [0u8; 1024]
         }
     }
@@ -130,7 +158,7 @@ impl Channel {
         let null_terminated_msg = message.to_string() + String::from_utf8(vec![0x0]).unwrap().as_str();
         let msg_encoded = null_terminated_msg.as_bytes();
 
-        let res = match self.stream.borrow_mut().lock().await.write_u32(msg_encoded.len() as u32).await {
+        let res = match self.writer.write_all(msg_encoded).await {
             Ok(_) => None,
             Err(err_temp) => Some(Error{ msg: err_temp.to_string() })
         };
@@ -138,18 +166,26 @@ impl Channel {
             return Err(error);
         }
 
-        let res = match self.stream.lock().await.write_all(message.as_bytes()).await {
-            Ok(_) => None,
-            Err(err_temp) => Some(Error{ msg: err_temp.to_string() })
-        };
-        if let Some(error) = res {
-            return Err(error);
-        }
+        // let res = match self.stream.write_all(message.as_bytes()).await {
+        //     Ok(_) => None,
+        //     Err(err_temp) => Some(Error{ msg: err_temp.to_string() })
+        // };
+        // if let Some(error) = res {
+        //     return Err(error);
+        // }
 
         Ok(())
     }
     pub async fn receive(&mut self) -> Result<String, Error> {
-        let bytes_read = self.stream.lock().await.try_read(&mut self.buffer).unwrap();
+        let (bytes_read, maybe_err) = match self.reader.read(&mut self.buffer).await {
+            Ok(bytes_read) => (bytes_read, None),
+            Err(err_msg) => (0, Some(Err(Error {msg: err_msg.to_string()})))
+        };
+        if let Some(err) = maybe_err {
+            return err;
+        }
+        println!("Passed reading buffer");
+        //let bytes_read = bytes_read;
         let mut msg_bytes = Vec::from_iter(self.buffer[..bytes_read].iter().cloned());
 
         // check if null terminated string
@@ -158,20 +194,32 @@ impl Channel {
 
         let msg = String::from_utf8(msg_bytes).unwrap();
 
+
         Ok(msg)
     }
 }
 
 pub struct Client {
-    stream: Arc<Mutex<TcpStream>>
+    stream: Option<TcpStream>
 }
 
 impl Client {
-    pub fn new(stream: Arc<Mutex<TcpStream>>) -> Self {
-        Client { stream: stream.clone() }
+    pub fn new(stream: TcpStream) -> Self {
+        Client { stream: Some(stream) }
     }
-    pub async fn channel(&self, name: &str) -> Result<Channel, Error> {
-        let mut channel = Channel::new(self.stream.clone());
+    pub async fn channel(&mut self, name: &str) -> Result<Channel, Error> {
+        // get stream out of Client
+        // let (stream_inst, err) = match &self.stream {
+        //     Some(stream) => (Some(stream), None),
+        //     None => (None, Some(Err(Error { msg: "failed to get stream from client.".to_string() })))
+        // };
+        // if let Some(err) = err {
+        //     return err;
+        // }
+        let stream_inst;
+        stream_inst = self.stream.take().unwrap();
+
+        let mut channel = Channel::new(stream_inst);
 
         match channel.send(name).await {
             Ok(_) => Ok(channel),
