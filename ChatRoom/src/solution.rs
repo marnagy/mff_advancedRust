@@ -1,18 +1,18 @@
-#![feature(type_alias_impl_trait)]
-
 extern crate tokio;
 
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use std::future::Future;
-use futures::executor;
+use std::net::SocketAddr;
+//use futures::executor;
 use std::sync::Arc;
 
 // #[derive(Debug)]
 pub struct Server {
     listener: Arc<TcpListener>,
     streams: Arc<Mutex<Vec<TcpStream>>>,
-    live_loop: Arc<Option<Box<dyn Future<Output = ()>>>>
+    live_loop: Arc<Option<Box<JoinHandle<()>>>>
 }
 
 impl Clone for Server {
@@ -34,22 +34,27 @@ impl Server {
             live_loop: Arc::new(None)
         };
 
+        // shallow copy
         let server_clone = server.clone();
 
-        tokio::spawn(Server::run(server_clone));
-        //server.live_loop = Arc::new(Some(Box::new(live_loop)));
+        let handle = tokio::spawn(async move {
+            server_clone.process_connection().await;
+        });
+        //let fut = server_clone.run();
+        server.live_loop = Arc::new(Some(Box::new(handle)));
 
         server
 
     }
-    async fn run(server: Server) {
+    async fn process_connection(&self) {
         println!("Server is waiting for connection...");
 
         loop {
-            match server.listener.accept().await {
-                Ok((_socket, addr)) => {
-                    println!("new client: {:?}", addr)
+            match self.listener.accept().await {
+                Ok((socket, addr)) => {
+                    println!("new client: {:?}", addr);
                     // TODO: process new connection
+                    //tokio::spawn();
                 },
                 Err(e) => println!("couldn't get client: {:?}", e),
             }
