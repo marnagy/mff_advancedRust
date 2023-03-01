@@ -16,10 +16,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     sleep(Duration::from_secs(1) ).await;
 
     let mut client1 = Client::new( TcpStream::connect("localhost:8000").await? );
-    let channel1 = client1.channel("Marek").await.unwrap();
+    let mut channel1 = client1.channel("Test1").await.unwrap();
 
-    // let client2 = Client::new( Arc::new(Mutex::new(TcpStream::connect("localhost:8000").await?)) );
-    // let channel2 = client2.channel("Samo").await.unwrap();
+    let mut client2 = Client::new( TcpStream::connect("localhost:8000").await? );
+    let mut channel2 = client2.channel("Test2").await.unwrap();
+
+    let _ = channel2.send("ahoj").await;
+    let _ = channel1.send("maj sa").await;
 
     println!(">>> Starting sleep from main thread");
     sleep(Duration::from_secs(2) ).await;

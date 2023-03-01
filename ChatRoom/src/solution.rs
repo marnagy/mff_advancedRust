@@ -75,7 +75,7 @@ impl Server {
             let server_clone = self.clone();
             match self.listener.accept().await {
                 Ok((socket, addr)) => {
-                    println!("new client: {:?}", addr);
+                    //println!("new client: {:?}", addr);
                     // process new connection
                     tokio::spawn(async move {
                         server_clone.process_connection(socket, addr).await;
@@ -99,20 +99,29 @@ impl Server {
             channel.lock().await.receive().await.unwrap()
         };
 
-        println!("Received name: {}", name);
+        // println!("Received name: {}", name);
 
         //let channel_cloned = channel.copy();
-        let connection_index;
+        //let connection_index;
         {
             let mut streams = self.streams.lock().await;
-            connection_index = streams.len();
-            streams.push( (name, channel.clone(), addr.clone()) );
+            //connection_index = streams.len();
+            streams.push( (name.clone(), channel.clone(), addr.clone()) );
         }
 
         // TODO: 
         loop {
             let received_msg_from_client =  channel.lock().await.receive().await.unwrap();
-            println!("Received msg: \"{}\" from {}", received_msg_from_client, addr);
+            println!(">>> Received msg: \"{}\" from {}", received_msg_from_client, addr);
+            let msg = format!("{x} -> {y}", x = name, y = received_msg_from_client);
+            {
+                let streams = self.streams.lock().await;
+                let length = streams.len();
+                for index in 0..length {
+                    let (_, client_channel, _) = streams.get(index).unwrap();
+                    client_channel.lock().await.send(msg.as_str()).await.unwrap();
+                }
+            }
         }
     }
     pub async fn quit(self) {
@@ -125,8 +134,8 @@ impl Server {
 pub struct Channel {
     //stream: Arc<Mutex<TcpStream>>,
     writer: WriteHalf<TcpStream>,
-    reader: ReadHalf<TcpStream>,
-    buffer: [u8; 1024]
+    reader: ReadHalf<TcpStream>
+    //buffer: [u8; 1024]
 }
 
 // impl Clone for Channel {
@@ -150,8 +159,8 @@ impl Channel {
         Channel {
             //stream: Arc::new(Mutex::new(stream)),
             writer: writer,
-            reader: reader,
-            buffer: [0u8; 1024]
+            reader: reader
+            //buffer: [0u8; 1024]
         }
     }
     pub async fn send(&mut self, message: &str) -> Result<(), Error> {
@@ -177,16 +186,17 @@ impl Channel {
         Ok(())
     }
     pub async fn receive(&mut self) -> Result<String, Error> {
-        let (bytes_read, maybe_err) = match self.reader.read(&mut self.buffer).await {
+        let mut buffer = [0u8; 1024];
+        let (bytes_read, maybe_err) = match self.reader.read(&mut buffer).await {
             Ok(bytes_read) => (bytes_read, None),
             Err(err_msg) => (0, Some(Err(Error {msg: err_msg.to_string()})))
         };
         if let Some(err) = maybe_err {
             return err;
         }
-        println!("Passed reading buffer");
+        //println!("Passed reading buffer");
         //let bytes_read = bytes_read;
-        let mut msg_bytes = Vec::from_iter(self.buffer[..bytes_read].iter().cloned());
+        let mut msg_bytes = Vec::from_iter(buffer[..bytes_read].iter().cloned());
 
         // check if null terminated string
         assert!(msg_bytes.last().unwrap() == &0u8);
@@ -194,6 +204,7 @@ impl Channel {
 
         let msg = String::from_utf8(msg_bytes).unwrap();
 
+        println!("Received msg >>> {}", msg);
 
         Ok(msg)
     }
