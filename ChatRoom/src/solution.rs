@@ -3,13 +3,14 @@ extern crate tokio;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use tokio::io::{AsyncBufRead, AsyncWrite, BufReader, BufWriter, ReadHalf, WriteHalf};
+use tokio::io::{ReadHalf, WriteHalf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::runtime::Runtime;
 use std::borrow::BorrowMut;
 use std::fmt::Display;
 //use std::io::{BufWriter, BufReader};
 use std::net::SocketAddr;
+use std::rc::Rc;
 use std::sync::Arc;
 //use std::futures::executor;
 
@@ -32,13 +33,12 @@ impl std::error::Error for Error {
 // #[derive(Debug)]
 pub struct Server {
     listener: Arc<TcpListener>,
-    streams: Arc<Mutex<Vec<(String, Arc<Mutex<Channel>>, SocketAddr)>>>,
-    live_loop: Arc<Option<Box<JoinHandle<()>>>>
+    streams: Arc<Mutex<Vec<Mutex<(String, Arc<Mutex<Channel>>, SocketAddr)>>>>,
+    live_loop: Arc<Mutex<Vec<JoinHandle<()>>>>
 }
 
 impl Clone for Server {
     fn clone(&self) -> Self {
-        // TODO: CONTINUE HERE
         Server {
             listener: self.listener.clone(),
             streams: self.streams.clone(),
@@ -52,7 +52,7 @@ impl Server {
         let mut server = Server {
             listener: Arc::new(listener),
             streams: Arc::new(Mutex::new(Vec::new())),
-            live_loop: Arc::new(None)
+            live_loop: Arc::new(Mutex::new(Vec::new()))
         };
 
         // shallow copy
@@ -61,8 +61,14 @@ impl Server {
         let handle = tokio::spawn(async move {
             server_clone.start_live_loop().await;
         });
+
+        // shallow copy
+        let server_clone = server.clone();
+
+        tokio::spawn(async move {
+            server_clone.live_loop.lock().await.push(handle);
+        });
         //let fut = server_clone.run();
-        server.live_loop = Arc::new(Some(Box::new(handle)));
 
         server
 
@@ -75,9 +81,8 @@ impl Server {
             let server_clone = self.clone();
             match self.listener.accept().await {
                 Ok((socket, addr)) => {
-                    //println!("new client: {:?}", addr);
                     // process new connection
-                    tokio::spawn(async move {
+                    let joinhandle = tokio::spawn(async move {
                         server_clone.process_connection(socket, addr).await;
                     });
                 },
@@ -99,34 +104,42 @@ impl Server {
             channel.lock().await.receive().await.unwrap()
         };
 
-        // println!("Received name: {}", name);
-
-        //let channel_cloned = channel.copy();
-        //let connection_index;
         {
             let mut streams = self.streams.lock().await;
-            //connection_index = streams.len();
-            streams.push( (name.clone(), channel.clone(), addr.clone()) );
-        }
+            streams.push( Mutex::new( (name.clone(), channel.clone(), addr.clone()) ) );
+        } 
 
         // TODO: 
         loop {
             let received_msg_from_client =  channel.lock().await.receive().await.unwrap();
-            println!(">>> Received msg: \"{}\" from {}", received_msg_from_client, addr);
+            println!(">>> Received msg: \"{}\" from {}", received_msg_from_client, name);
             let msg = format!("{x} -> {y}", x = name, y = received_msg_from_client);
             {
-                let streams = self.streams.lock().await;
+                println!(">>> Locking Server.streams from {}...", name);
+                let streams = &self.streams.lock().await;
                 let length = streams.len();
                 for index in 0..length {
-                    let (_, client_channel, _) = streams.get(index).unwrap();
+                    let items = &streams.get(index).unwrap().lock().await;
+                    if items.0 == name {
+                        continue;
+                    }
+                    let client_channel = items.1.clone();
                     client_channel.lock().await.send(msg.as_str()).await.unwrap();
                 }
+                println!(">>> Unlocking Server.streams from {}...", name);
             }
         }
     }
-    pub async fn quit(self) {
-        let mut streams = self.streams.lock().await;
-        streams.clear();
+    pub async fn quit(&self) {
+        // kill all live loops
+        for live_loop in self.live_loop.lock().await.iter() {
+            live_loop.abort()
+        }
+        println!(">>> Aborted all live loops.");
+
+        // end all streams
+        // let mut streams = self.streams.lock().await; // !!! DEADLOCK !!!
+        // streams.clear();
     }
 }
 
@@ -204,7 +217,7 @@ impl Channel {
 
         let msg = String::from_utf8(msg_bytes).unwrap();
 
-        println!("Received msg >>> {}", msg);
+        // println!("Received msg >>> {}", msg);
 
         Ok(msg)
     }
