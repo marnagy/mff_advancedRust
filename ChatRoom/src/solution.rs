@@ -15,6 +15,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 //use std::futures::executor;
 
+pub const VERBOSE: bool = false;
+
 #[derive(Debug, PartialEq)]
 pub struct Error {
     msg: String
@@ -75,7 +77,9 @@ impl Server {
 
     }
     async fn start_live_loop(&self) {
-        println!("Server is waiting for connection...");
+        if VERBOSE {
+            println!("Server is waiting for connection...");
+        }
 
         
         loop {
@@ -106,7 +110,9 @@ impl Server {
             channel.lock().await.receive().await.unwrap()
         };
 
-        println!(">>> Registered user {}", name);
+        if VERBOSE {
+            println!(">>> Registered user {}", name);
+        }
 
         {
             let mut streams = self.streams.lock().await;
@@ -115,10 +121,16 @@ impl Server {
 
         loop {
             let received_msg_from_client =  channel.lock().await.receive().await.unwrap();
-            println!(">>> Received msg: \"{}\" from {}", received_msg_from_client, name);
+
+            if VERBOSE {
+                println!(">>> Received msg: \"{}\" from {}", received_msg_from_client, name);
+            }
+
             let msg = format!("{x} -> {y}", x = name, y = received_msg_from_client);
             {
-                println!(">>> Locking Server.streams from {}...", name);
+                if VERBOSE {
+                    println!(">>> Locking Server.streams from {}...", name);
+                }
                 let streams = &self.streams.lock().await;
                 let length = streams.len();
                 for index in 0..length {
@@ -127,11 +139,15 @@ impl Server {
                         continue;
                     }
                     let client_channel = items.1.clone();
-                    println!(">>> Sending message {} to {}", msg, items.0);
+                    if VERBOSE {
+                        println!(">>> Sending message {} to {}", msg, items.0);
+                    }
                     let mut channel = client_channel.lock().await;
                     channel.send(msg.as_str()).await.unwrap();
                 }
-                println!(">>> Unlocking Server.streams from {}...", name);
+                if VERBOSE {
+                    println!(">>> Unlocking Server.streams from {}...", name);
+                }
             }
         }
     }
@@ -151,42 +167,25 @@ impl Server {
 
 #[derive(Debug)]
 pub struct Channel {
-    //stream: Arc<Mutex<TcpStream>>,
     writer: WriteHalf<TcpStream>,
     reader: ReadHalf<TcpStream>,
     message_queue: LinkedList<String>
-    //buffer: [u8; 1024]
 }
-
-// impl Clone for Channel {
-//     fn clone(&self) -> Self {
-//         let stream_mutex_guard = Runtime::new().unwrap().block_on(async {
-//             self.stream.lock().await
-//         });
-//         let (mut reader, mut writer) = tokio::io::split(stream_mutex_guard);
-//         Channel {
-//             stream: self.stream.clone(),
-//             writer: writer,
-//             reader: reader,
-//             buffer: self.buffer.clone()
-//         }
-//     }
-// }
 
 impl Channel {
     fn new(stream: TcpStream) -> Self {
         let (reader, writer) = tokio::io::split(stream);
         Channel {
-            //stream: Arc::new(Mutex::new(stream)),
             writer: writer,
             reader: reader,
             message_queue: LinkedList::new()
-            //buffer: [0u8; 1024]
         }
     }
     pub async fn send(&mut self, message: &str) -> Result<(), Error> {
         let null_terminated_msg = message.to_string() + String::from_utf8(vec![0x0]).unwrap().as_str();
-        //println!("Sending message: {}", null_terminated_msg);
+        if VERBOSE {
+            println!("Sending message: {}", null_terminated_msg);
+        }
         let msg_encoded = null_terminated_msg.as_bytes().to_vec();
 
         let res = match self.writer.write_all(&msg_encoded[..]).await {
@@ -198,14 +197,6 @@ impl Channel {
         }
 
         let _ = self.writer.flush().await;
-
-        // let res = match self.stream.write_all(message.as_bytes()).await {
-        //     Ok(_) => None,
-        //     Err(err_temp) => Some(Error{ msg: err_temp.to_string() })
-        // };
-        // if let Some(error) = res {
-        //     return Err(error);
-        // }
 
         Ok(())
     }
@@ -251,7 +242,10 @@ impl Channel {
             let mut msg_cache = Vec::new();
             loop {
                 let value = msg_buffer.remove(0);
-                //println!("Processing {} as char -> {}", value as u8, value);
+
+                if VERBOSE {
+                    println!("Processing {} as char -> {}", value as u8, value);
+                }
 
                 // end of message
                 if value == 0u8 as char {
@@ -261,7 +255,9 @@ impl Channel {
                 msg_cache.push(value as u8);
             }
             let single_msg = String::from_utf8(msg_cache).unwrap();
-            //println!("Parsed message: \"{}\"", single_msg);
+            if VERBOSE {
+                println!("Parsed message: \"{}\"", single_msg);
+            }
             messages.push(single_msg);
         }
 
@@ -275,16 +271,6 @@ impl Channel {
             Some(msg) => Ok(msg),
             None => Err( Error { msg: "No message in queue.".to_string() } )
         }
-
-        // // check if null terminated string
-        // assert!(msg_bytes.last().unwrap() == &0u8);
-        // msg_bytes.remove(msg_bytes.len() - 1);
-
-        // let msg = String::from_utf8(msg_bytes).unwrap();
-
-        // println!("Received msg >>> {}", msg);
-
-        //Ok(msg)
     }
 }
 
@@ -297,14 +283,6 @@ impl Client {
         Client { stream: Some(stream) }
     }
     pub async fn channel(&mut self, name: &str) -> Result<Channel, Error> {
-        // get stream out of Client
-        // let (stream_inst, err) = match &self.stream {
-        //     Some(stream) => (Some(stream), None),
-        //     None => (None, Some(Err(Error { msg: "failed to get stream from client.".to_string() })))
-        // };
-        // if let Some(err) = err {
-        //     return err;
-        // }
         let stream_inst;
         stream_inst = self.stream.take().unwrap();
 
@@ -314,7 +292,5 @@ impl Client {
             Ok(_) => Ok(channel),
             Err(err) => Err(Error { msg: err.to_string() })
         }
-
-        //Ok()
     }
 }

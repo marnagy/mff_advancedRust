@@ -2,7 +2,7 @@ mod solution;
 
 use tokio::sync::Mutex;
 use std::{error::Error, time::Duration};
-use solution::{Server, Client};
+use solution::{Server, Client, VERBOSE};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::sleep;
 use std::sync::Arc;
@@ -28,13 +28,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let _ = channel2.send("ahoj1").await;
     let _ = channel1.send("maj sa1").await;
 
-    println!(">> Starting sleep from main thread");
+    if VERBOSE {
+        println!(">> Starting sleep from main thread");
+    }
     sleep(Duration::from_secs(5) ).await;
-    println!(">> Sleep passed");
+    if VERBOSE {
+        println!(">> Sleep passed");
+    }
 
     server.quit().await;
 
-    println!();
+    if VERBOSE {
+        println!();
+    }
     
     println!("Client1 received:");
     loop {
