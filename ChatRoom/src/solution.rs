@@ -5,17 +5,15 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::io::{ReadHalf, WriteHalf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::runtime::Runtime;
-use std::borrow::BorrowMut;
-use std::collections::{VecDeque, LinkedList};
+use tokio::time::sleep;
+use std::collections::{LinkedList};
 use std::fmt::Display;
-//use std::io::{BufWriter, BufReader};
 use std::net::SocketAddr;
-use std::rc::Rc;
 use std::sync::Arc;
-//use std::futures::executor;
+use std::time::Duration;
 
 pub const VERBOSE: bool = false;
+const BUFFER_SIZE: usize = 1024;
 
 #[derive(Debug, PartialEq)]
 pub struct Error {
@@ -37,6 +35,7 @@ impl std::error::Error for Error {
 pub struct Server {
     listener: Arc<TcpListener>,
     streams: Arc<Mutex<Vec<Mutex<(String, Arc<Mutex<Channel>>, SocketAddr)>>>>,
+    accept_loop: Arc<Mutex<Option<JoinHandle<()>>>>,
     live_loops: Arc<Mutex<Vec<JoinHandle<()>>>>
 }
 
@@ -45,16 +44,19 @@ impl Clone for Server {
         Server {
             listener: self.listener.clone(),
             streams: self.streams.clone(),
+            accept_loop: self.accept_loop.clone(),
             live_loops: self.live_loops.clone()
+
         }
     }
 }
 
 impl Server {
     pub fn new(listener: TcpListener) -> Self {
-        let mut server = Server {
+        let server = Server {
             listener: Arc::new(listener),
             streams: Arc::new(Mutex::new(Vec::new())),
+            accept_loop: Arc::new(Mutex::new(None)),
             live_loops: Arc::new(Mutex::new(Vec::new()))
         };
 
@@ -68,10 +70,15 @@ impl Server {
         // shallow copy
         let server_clone = server.clone();
 
-        tokio::spawn(async move {
+        let _accept_loop = tokio::spawn(async move {
             server_clone.live_loops.lock().await.push(handle);
         });
-        //let fut = server_clone.run();
+
+        // let server_clone = server.clone();
+
+        // tokio::spawn(async move {
+        //     server_clone.accept_loop.lock().await.insert(accept_loop);
+        // });
 
         server
 
@@ -152,15 +159,23 @@ impl Server {
         }
     }
     pub async fn quit(&self) {
+        //self.accept_loop.lock().await.as_mut().unwrap().abort();
+
         // kill all live loops
         for live_loop in self.live_loops.lock().await.iter() {
             live_loop.abort();
+            sleep(Duration::from_secs(1)).await;
         }
+
 
         //println!(">>> Aborted all live loops.");
 
         // end all streams
         let mut streams = self.streams.lock().await;
+        for stream in streams.iter() {
+            let items = stream.lock().await;
+            drop(items);
+        }
         streams.clear();
     }
 }
@@ -206,7 +221,6 @@ impl Channel {
             return Ok(msg);
         }
 
-        const BUFFER_SIZE: usize = 1024;
         let mut buffer = [0u8; BUFFER_SIZE];
         let mut bytes_read = buffer.len(); 
         let mut maybe_err;
@@ -229,7 +243,7 @@ impl Channel {
 
             bytes_counter += bytes_read;
 
-            let mut current_msg_bytes = buffer[..bytes_read].to_vec();
+            let current_msg_bytes = buffer[..bytes_read].to_vec();
             msg_buffer = msg_buffer + String::from_utf8(current_msg_bytes).unwrap().as_str();
         }
 

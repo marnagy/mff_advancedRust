@@ -1,11 +1,9 @@
 mod solution;
 
-use tokio::sync::Mutex;
 use std::{error::Error, time::Duration};
 use solution::{Server, Client, VERBOSE};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::sleep;
-use std::sync::Arc;
 //use std::thread::sleep;
 
 #[tokio::main]
@@ -20,18 +18,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut client2 = Client::new( TcpStream::connect("localhost:8000").await? );
     let mut channel2 = client2.channel("Test2").await.unwrap();
 
+    let mut client3 = Client::new( TcpStream::connect("localhost:8000").await? );
+    let mut channel3 = client3.channel("Test3").await.unwrap();
+
     sleep(Duration::from_secs(1) ).await;
 
-    let _ = channel1.send("maj sa").await;
-    let _ = channel2.send("ahoj").await;
+    let _ = channel1.send("Hello").await;
+    let _ = channel2.send("Hi").await;
+    let _ = channel3.send("Good Day").await;
 
-    let _ = channel2.send("ahoj1").await;
-    let _ = channel1.send("maj sa1").await;
+    let _ = channel1.send("Hello1").await;
+    let _ = channel2.send("Hi1").await;
+    let _ = channel3.send("Good Day1").await;
+
+    let _ = channel1.send("Hello2").await;
+    let _ = channel2.send("Hi2").await;
+    let _ = channel3.send("Good Day2").await;
 
     if VERBOSE {
         println!(">> Starting sleep from main thread");
     }
-    sleep(Duration::from_secs(5) ).await;
+    sleep(Duration::from_secs(10) ).await;
     if VERBOSE {
         println!(">> Sleep passed");
     }
@@ -70,7 +77,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
         println!("{}", msg);
-    }
+    }  
+
+    println!();
+
+    println!("Client3 received:");
+    loop {
+        let msg_res = channel3.receive().await;
+        let msg;
+        match msg_res {
+            Ok(message) => { msg = message; },
+            Err(err) => {
+                println!("{}", err.to_string());
+                break;
+            }
+        }
+        println!("{}", msg);
+    } 
 
     Ok(())
 }
