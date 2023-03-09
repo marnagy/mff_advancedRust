@@ -159,16 +159,15 @@ impl Server {
         }
     }
     pub async fn quit(&self) {
-        //self.accept_loop.lock().await.as_mut().unwrap().abort();
-
         // kill all live loops
         for live_loop in self.live_loops.lock().await.iter() {
             live_loop.abort();
             sleep(Duration::from_secs(1)).await;
         }
 
-
-        //println!(">>> Aborted all live loops.");
+        if VERBOSE {
+            println!(">>> Aborted all live loops.");
+        }
 
         // end all streams
         let mut streams = self.streams.lock().await;

@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if VERBOSE {
         println!(">> Starting sleep from main thread");
     }
-    sleep(Duration::from_secs(10) ).await;
+    sleep(Duration::from_secs(5) ).await;
     if VERBOSE {
         println!(">> Sleep passed");
     }
