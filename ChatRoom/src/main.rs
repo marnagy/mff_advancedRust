@@ -13,7 +13,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut client1 = Client::new( TcpStream::connect("localhost:8000").await? );
     let mut channel1 = client1.channel("Test1").await.unwrap();
-
     
     let mut client2 = Client::new( TcpStream::connect("localhost:8000").await? );
     let mut channel2 = client2.channel("Test2").await.unwrap();
@@ -23,18 +22,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     sleep(Duration::from_secs(1) ).await;
 
-    let _ = channel1.send("Hello").await;
-    let _ = channel2.send("Hi").await;
-    let _ = channel3.send("Good Day").await;
-
-    let _ = channel1.send("Hello1").await;
-    let _ = channel2.send("Hi1").await;
-    let _ = channel3.send("Good Day1").await;
-
-    let _ = channel1.send("Hello2").await;
-    let _ = channel2.send("Hi2").await;
-    let _ = channel3.send("Good Day2").await;
-
+    for i in 0..5 {
+        let _ = channel1.send( format!("Hello{}", i).as_str() ).await;
+        let _ = channel2.send( format!("Hi{}", i).as_str() ).await;
+        let _ = channel3.send( format!("Good Day{}", i).as_str() ).await;
+    }
+    
     if VERBOSE {
         println!(">> Starting sleep from main thread");
     }
@@ -42,9 +35,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if VERBOSE {
         println!(">> Sleep passed");
     }
-
+    
     server.quit().await;
-
+    
+    sleep(Duration::from_secs(2) ).await;
+    
     if VERBOSE {
         println!();
     }
@@ -62,9 +57,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         println!("{}", msg);
     }
-
+    
     println!();
-
+    
     println!("Client2 received:");
     loop {
         let msg_res = channel2.receive().await;
@@ -78,9 +73,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         println!("{}", msg);
     }  
-
+    
     println!();
-
+    
     println!("Client3 received:");
     loop {
         let msg_res = channel3.receive().await;
@@ -94,7 +89,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         println!("{}", msg);
     } 
-
+    
+    
     Ok(())
 }
 

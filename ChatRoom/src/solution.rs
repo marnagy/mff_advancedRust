@@ -5,12 +5,11 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio::io::{ReadHalf, WriteHalf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::time::sleep;
 use std::collections::{LinkedList};
 use std::fmt::Display;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use tokio::time::{Duration, sleep};
 
 pub const VERBOSE: bool = false;
 const BUFFER_SIZE: usize = 1024;
@@ -31,7 +30,7 @@ impl std::error::Error for Error {
 }
 
 
-// #[derive(Debug)]
+#[derive(Clone)]
 pub struct Server {
     listener: Arc<TcpListener>,
     streams: Arc<Mutex<Vec<Mutex<(String, Arc<Mutex<Channel>>, SocketAddr)>>>>,
@@ -39,17 +38,17 @@ pub struct Server {
     live_loops: Arc<Mutex<Vec<JoinHandle<()>>>>
 }
 
-impl Clone for Server {
-    fn clone(&self) -> Self {
-        Server {
-            listener: self.listener.clone(),
-            streams: self.streams.clone(),
-            accept_loop: self.accept_loop.clone(),
-            live_loops: self.live_loops.clone()
+// impl Clone for Server {
+//     fn clone(&self) -> Self {
+//         Server {
+//             listener: self.listener.clone(),
+//             streams: self.streams.clone(),
+//             accept_loop: self.accept_loop.clone(),
+//             live_loops: self.live_loops.clone()
 
-        }
-    }
-}
+//         }
+//     }
+// }
 
 impl Server {
     pub fn new(listener: TcpListener) -> Self {
@@ -74,10 +73,11 @@ impl Server {
             server_clone.live_loops.lock().await.push(handle);
         });
 
-        // let server_clone = server.clone();
+        // shallow copy
+        let server_clone = server.clone();
 
         // tokio::spawn(async move {
-        //     server_clone.accept_loop.lock().await.insert(accept_loop);
+        //     server_clone.accept_loop.lock().await.insert(_accept_loop);
         // });
 
         server
@@ -104,7 +104,6 @@ impl Server {
         }
     }
     async fn process_connection(&self, socket: TcpStream, addr: SocketAddr){
-        //let (mut read, mut write) = tokio::io::split(socket);
         let channel = Arc::new(
             Mutex::new(
                 Channel::new(
@@ -114,7 +113,8 @@ impl Server {
         );
         // read name from channel
         let name = {
-            channel.lock().await.receive().await.unwrap()
+            let mut c = channel.lock().await;
+            c.receive().await.unwrap()
         };
 
         if VERBOSE {
@@ -127,47 +127,54 @@ impl Server {
         } 
 
         loop {
-            let received_msg_from_client =  channel.lock().await.receive().await.unwrap();
+            let msg: String = {
+                let received_msg_from_client = channel.lock().await.receive().await.unwrap();
+    
+                if VERBOSE { println!(">>> Received msg: \"{}\" from {}", received_msg_from_client, name); }
+    
+                format!("{x} sent -> {y}", x = name, y = received_msg_from_client)
+            };
 
-            if VERBOSE {
-                println!(">>> Received msg: \"{}\" from {}", received_msg_from_client, name);
-            }
-
-            let msg = format!("{x} -> {y}", x = name, y = received_msg_from_client);
             {
-                if VERBOSE {
-                    println!(">>> Locking Server.streams from {}...", name);
-                }
+                if VERBOSE { println!(">>> Locking Server.streams from {}...", name); }
                 let streams = &self.streams.lock().await;
                 let length = streams.len();
+
                 for index in 0..length {
                     let items = &streams.get(index).unwrap().lock().await;
                     if items.0 == name {
                         continue;
                     }
                     let client_channel = items.1.clone();
-                    if VERBOSE {
-                        println!(">>> Sending message {} to {}", msg, items.0);
+                    if VERBOSE { println!(">>> Locking channel for client {} to send message {}", items.0, msg); }
+                    {
+                        // !: this lock() causes DEADLOCK with something
+                        // good luck to whoever decides to undergo this journey (y)
+                        let mut channel = client_channel.lock().await;
+                        if VERBOSE { println!(">>> Locked channel for client {} by client {}", items.0, name); }
+                        channel.send(msg.as_str()).await.unwrap();
+                        if VERBOSE { println!(">>> Sending message {} to {}", msg, items.0); }
                     }
-                    let mut channel = client_channel.lock().await;
-                    channel.send(msg.as_str()).await.unwrap();
                 }
-                if VERBOSE {
-                    println!(">>> Unlocking Server.streams from {}...", name);
-                }
+                if VERBOSE { println!(">>> Unlocking Server.streams from {}...", name); }
             }
         }
     }
     pub async fn quit(&self) {
+        // let accept_loop = self.accept_loop.lock().await.take();
+        // accept_loop.unwrap().abort();
+
         // kill all live loops
-        for live_loop in self.live_loops.lock().await.iter() {
-            live_loop.abort();
-            sleep(Duration::from_secs(1)).await;
+        {
+            let mut live_loops = self.live_loops.lock().await;
+            for live_loop in live_loops.iter() {
+                live_loop.abort();
+                sleep(Duration::from_secs(2)).await;
+            }
+            live_loops.clear();
         }
 
-        if VERBOSE {
-            println!(">>> Aborted all live loops.");
-        }
+        if VERBOSE { println!(">>> Aborted all live loops."); }
 
         // end all streams
         let mut streams = self.streams.lock().await;
@@ -190,8 +197,8 @@ impl Channel {
     fn new(stream: TcpStream) -> Self {
         let (reader, writer) = tokio::io::split(stream);
         Channel {
-            writer: writer,
-            reader: reader,
+            writer,
+            reader,
             message_queue: LinkedList::new()
         }
     }
@@ -214,6 +221,8 @@ impl Channel {
 
         Ok(())
     }
+
+    // implement using [msg_length, msg] or store internally using Mutex
     pub async fn receive(&mut self) -> Result<String, Error> {
         if self.message_queue.len() > 0 {
             let msg = self.message_queue.pop_front().unwrap();
@@ -256,9 +265,9 @@ impl Channel {
             loop {
                 let value = msg_buffer.remove(0);
 
-                if VERBOSE {
-                    println!("Processing {} as char -> {}", value as u8, value);
-                }
+                // if VERBOSE {
+                //     println!("Processing {} as char -> {}", value as u8, value);
+                // }
 
                 // end of message
                 if value == 0u8 as char {
